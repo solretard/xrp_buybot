@@ -1,0 +1,14 @@
+{
+  "name": "reality-buybot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "xrpl": "^3.0.0",
+    "node-telegram-bot-api": "^0.64.0",
+    "node-fetch": "^3.3.2"
+  }
+}
