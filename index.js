@@ -80,8 +80,11 @@ function fmtNum(n) {
   return '$'+n.toFixed(2)
 }
 function hexToTicker(hex) {
-  try { return Buffer.from(hex.replace(/00+$/,''),'hex').toString('ascii').replace(/[^a-zA-Z0-9]/g,'').toUpperCase() }
-  catch { return hex }
+  try {
+    const clean = hex.replace(/00+$/, '')
+    const decoded = Buffer.from(clean, 'hex').toString('ascii').replace(/[^a-zA-Z0-9$]/g, '')
+    return decoded.toUpperCase()
+  } catch { return hex }
 }
 
 function extractTweetId(url) {
@@ -343,7 +346,10 @@ async function resolveTokenFromIssuer(issuer) {
     console.log('🔍 XRPScan obligations:', JSON.stringify(d2).slice(0, 200))
     if (Array.isArray(d2) && d2.length > 0) {
       const cur = d2[0].currency
-      if (cur) return cur.length === 40 ? hexToTicker(cur) : cur
+      if (cur) {
+        const ticker = (cur.length > 6) ? hexToTicker(cur) : cur
+        if (ticker && ticker.length > 0) return ticker
+      }
     }
 
     // Try gateway_balances via XRPL
