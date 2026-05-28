@@ -332,24 +332,30 @@ bot.onText(/\/start(?:@\w+)?/, msg => {
 
 async function resolveTokenFromIssuer(issuer) {
   try {
-    await connectXRPL()
-    const res = await client.request({ command: 'account_offers', account: issuer, limit: 1 })
-    const lines = await client.request({ command: 'account_lines', account: issuer, limit: 5 })
-    if (lines?.result?.lines?.length > 0) {
-      for (const line of lines.result.lines) {
-        const cur = line.currency
-        if (cur && cur.length <= 20) {
-          const ticker = cur.length === 40 ? hexToTicker(cur) : cur
-          if (ticker && ticker.length > 0) return ticker
-        }
-      }
+    // Try XRPScan account info first
+    const r1 = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer)
+    const d1 = await r1.json()
+    console.log('🔍 XRPScan account:', JSON.stringify(d1).slice(0, 200))
+
+    // Try obligations (what this account has issued)
+    const r2 = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/obligations')
+    const d2 = await r2.json()
+    console.log('🔍 XRPScan obligations:', JSON.stringify(d2).slice(0, 200))
+    if (Array.isArray(d2) && d2.length > 0) {
+      const cur = d2[0].currency
+      if (cur) return cur.length === 40 ? hexToTicker(cur) : cur
     }
-    const assets = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/assets')
-    const d = await assets.json()
-    if (Array.isArray(d) && d.length > 0) {
-      const cur = d[0].currency
+
+    // Try gateway_balances via XRPL
+    await connectXRPL()
+    const gb = await client.request({ command: 'gateway_balances', account: issuer, ledger_index: 'validated' })
+    console.log('🔍 gateway_balances:', JSON.stringify(gb?.result).slice(0, 300))
+    const obligations = gb?.result?.obligations
+    if (obligations && Object.keys(obligations).length > 0) {
+      const cur = Object.keys(obligations)[0]
       return cur.length === 40 ? hexToTicker(cur) : cur
     }
+
     return null
   } catch (e) { console.log('resolveToken error: '+e.message); return null }
 }
