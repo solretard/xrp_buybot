@@ -8,8 +8,9 @@ const CHAT_ID        = process.env.CHAT_ID           || '-1003968691129'
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || ''
 const TWITTER_BEARER = process.env.TWITTER_BEARER    || ''
 const XRPL_WS        = 'wss://xrplcluster.com'
-const IMAGE_PATH     = './alert.png'
-const RAID_RESURFACE = 5
+const IMAGE_PATH      = './alert.png'
+const RAID_IMAGE_PATH = './raid.png'
+const RAID_RESURFACE  = 5
 
 const bot    = new TelegramBot(BOT_TOKEN, { polling: true })
 let client   = null
@@ -138,14 +139,16 @@ async function postRaidMessage(raid) {
     if (raid.msgId) {
       try { await bot.deleteMessage(raid.chatId, raid.msgId) } catch {}
     }
-    const sent = await bot.sendMessage(raid.chatId, text, {
+    const raidOpts = {
       parse_mode: 'HTML',
-      disable_web_page_preview: true,
       reply_markup: { inline_keyboard: [[
         { text: '🐦 Open Tweet', url: raid.url },
         { text: '❌ End Raid', callback_data: 'endraid' }
       ]]}
-    })
+    }
+    const sent = fs.existsSync(RAID_IMAGE_PATH)
+      ? await bot.sendPhoto(raid.chatId, RAID_IMAGE_PATH, { ...raidOpts, caption: text })
+      : await bot.sendMessage(raid.chatId, text, { ...raidOpts, disable_web_page_preview: true })
     raid.msgId = sent.message_id
     raid.msgCounter = 0
     if (metrics) {
@@ -510,11 +513,15 @@ bot.onText(/\/help(?:@\w+)?/, msg => {
 })
 
 const pendingImageUpload = new Set()
+const pendingRaidImageUpload = new Set()
 const pendingHourlyImage = new Map()
 if (!fs.existsSync('./images')) fs.mkdirSync('./images')
 
 bot.onText(/\/setimage(?:@\w+)?/, async msg => {
   await requireAdmin(msg, async () => { pendingImageUpload.add(msg.chat.id); bot.sendMessage(msg.chat.id, '🖼 Send the new alert image.') })
+})
+bot.onText(/\/setraidimage(?:@\w+)?/, async msg => {
+  await requireAdmin(msg, async () => { pendingRaidImageUpload.add(msg.chat.id); bot.sendMessage(msg.chat.id, '🚨 Send the new raid image.') })
 })
 bot.onText(/\/addimage(?:@\w+)?/, async msg => {
   await requireAdmin(msg, async () => {
@@ -578,6 +585,12 @@ bot.on('photo', async msg => {
   if (pendingImageUpload.has(chatId)) {
     pendingImageUpload.delete(chatId)
     try { fs.writeFileSync(IMAGE_PATH, await getFile()); bot.sendMessage(chatId, '✅ Alert image updated!') }
+    catch (e) { bot.sendMessage(chatId, '❌ '+e.message) }
+    return
+  }
+  if (pendingRaidImageUpload.has(chatId)) {
+    pendingRaidImageUpload.delete(chatId)
+    try { fs.writeFileSync(RAID_IMAGE_PATH, await getFile()); bot.sendMessage(chatId, '✅ Raid image updated!') }
     catch (e) { bot.sendMessage(chatId, '❌ '+e.message) }
     return
   }
@@ -647,7 +660,8 @@ bot.setMyCommands([
   { command:'buy',      description:'How to buy guide' },
   { command:'raid',     description:'Launch raid — url likes comments retweets (admin)' },
   { command:'endraid',  description:'End active raid (admin)' },
-  { command:'setimage', description:'Change buy alert image (admin)' },
+  { command:'setimage',     description:'Change buy alert image (admin)' },
+  { command:'setraidimage', description:'Change raid image (admin)' },
   { command:'addimage', description:'Add hourly image (admin)' },
   { command:'images',   description:'Show image count (admin)' },
   { command:'test',     description:'Send test buy alert (admin)' },
