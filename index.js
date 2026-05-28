@@ -89,12 +89,13 @@ function extractTweetId(url) {
 }
 
 async function fetchTweetMetrics(tweetId) {
-  if (!TWITTER_BEARER) return null
+  if (!TWITTER_BEARER) { console.log('⚠️ No TWITTER_BEARER set'); return null }
   try {
-    const r = await fetch('https://api.twitter.com/2/tweets/' + tweetId + '?tweet.fields=public_metrics', {
-      headers: { Authorization: 'Bearer ' + TWITTER_BEARER }
-    })
+    const url = 'https://api.twitter.com/2/tweets/' + tweetId + '?tweet.fields=public_metrics'
+    console.log('🐦 Fetching tweet:', url)
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + TWITTER_BEARER } })
     const d = await r.json()
+    console.log('🐦 Twitter response:', JSON.stringify(d))
     const m = d?.data?.public_metrics
     if (!m) return null
     return { likes: m.like_count||0, retweets: m.retweet_count||0, comments: m.reply_count||0 }
@@ -123,9 +124,9 @@ function buildRaidMsg(raid, metrics) {
 
   return '🚨 <b>RAID — $REALITY</b> 🪞\n\n' +
     '🎯 <b>Target:</b> ' + raid.url + '\n\n' +
-    '❤️ Likes:    ' + progressBar(lDone,raid.targetLikes) + ' ' + lDone + '/' + raid.targetLikes + ' (' + lPct + '%) — <b>' + lLeft + ' left</b>\n' +
-    '🔁 Retweets: ' + progressBar(rDone,raid.targetRetweets) + ' ' + rDone + '/' + raid.targetRetweets + ' (' + rPct + '%) — <b>' + rLeft + ' left</b>\n' +
-    '💬 Comments: ' + progressBar(cDone,raid.targetComments) + ' ' + cDone + '/' + raid.targetComments + ' (' + cPct + '%) — <b>' + cLeft + ' left</b>\n\n' +
+    '❤️ <b>Likes</b>\n' + progressBar(lDone,raid.targetLikes) + ' ' + lDone + '/' + raid.targetLikes + ' (' + lPct + '%) — <b>' + lLeft + ' left</b>\n\n' +
+    '🔁 <b>Retweets</b>\n' + progressBar(rDone,raid.targetRetweets) + ' ' + rDone + '/' + raid.targetRetweets + ' (' + rPct + '%) — <b>' + rLeft + ' left</b>\n\n' +
+    '💬 <b>Comments</b>\n' + progressBar(cDone,raid.targetComments) + ' ' + cDone + '/' + raid.targetComments + ' (' + cPct + '%) — <b>' + cLeft + ' left</b>\n\n' +
     'Two faces. One truth. One community.\nW.E. Hill, 1921 → XRPL, 2025.\n\n' +
     '<b>Let\'s go $REALITY fam 🪞🪞🪞</b>'
 }
