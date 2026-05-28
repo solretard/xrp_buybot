@@ -325,21 +325,61 @@ bot.onText(/\/start(?:@\w+)?/, msg => {
     '🪞 <b>$REALITY Bot</b>\n\n' +
     '/raid <code>url likes comments retweets</code> — Start raid\n' +
     '/endraid — End active raid\n' +
-    '/track <code>TICKER+rIssuer</code> — Track token\n' +
+    '/track <code>rIssuerAddress</code> — Track token\n' +
     '/price — Live price\n/mc — Market cap\n/chart — Charts\n/holders — Holders\n/buy — How to buy\n/help — All commands\n\n' +
     '<i>W.E.H 1921 · XRPL</i>', { parse_mode: 'HTML' })
 })
 
-bot.onText(/\/track(?:@\w+)?\s+(.+)/, async (msg, match) => {
+async function resolveTokenFromIssuer(issuer) {
+  try {
+    await connectXRPL()
+    const res = await client.request({ command: 'account_offers', account: issuer, limit: 1 })
+    const lines = await client.request({ command: 'account_lines', account: issuer, limit: 5 })
+    if (lines?.result?.lines?.length > 0) {
+      for (const line of lines.result.lines) {
+        const cur = line.currency
+        if (cur && cur.length <= 20) {
+          const ticker = cur.length === 40 ? hexToTicker(cur) : cur
+          if (ticker && ticker.length > 0) return ticker
+        }
+      }
+    }
+    const assets = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/assets')
+    const d = await assets.json()
+    if (Array.isArray(d) && d.length > 0) {
+      const cur = d[0].currency
+      return cur.length === 40 ? hexToTicker(cur) : cur
+    }
+    return null
+  } catch (e) { console.log('resolveToken error: '+e.message); return null }
+}
+
+bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
   await requireAdmin(msg, async () => {
-    const p = parseCA(match[1])
-    if (!p) return bot.sendMessage(msg.chat.id, '❌ Format: /track TICKER+rIssuerAddress')
-    const key = p.currency+'_'+p.issuer
-    if (tracking[key]) return bot.sendMessage(msg.chat.id, '⚠️ Already tracking <b>$'+p.currency+'</b>', { parse_mode: 'HTML' })
+    const input = match[1].trim()
+    let issuer, currency
+
+    // If it's just an issuer address (starts with r, length 25+)
+    if (input.startsWith('r') && input.length >= 25 && !input.includes('+') && !input.includes(' ')) {
+      issuer = input
+      bot.sendMessage(msg.chat.id, '🔍 Looking up token for <code>'+issuer+'</code>...', { parse_mode: 'HTML' })
+      currency = await resolveTokenFromIssuer(issuer)
+      if (!currency) return bot.sendMessage(msg.chat.id, '❌ Could not detect token. Try: /track TICKER+rIssuerAddress')
+    } else {
+      // Legacy format: TICKER+issuer or TICKER issuer
+      const parts = input.split(/[\s+]+/)
+      if (parts.length < 2 || !parts[1].startsWith('r') || parts[1].length < 25)
+        return bot.sendMessage(msg.chat.id, '❌ Format: /track rIssuerAddress\nOr: /track TICKER+rIssuerAddress')
+      currency = parts[0].toUpperCase()
+      issuer = parts[1]
+    }
+
+    const key = currency+'_'+issuer
+    if (tracking[key]) return bot.sendMessage(msg.chat.id, '⚠️ Already tracking <b>$'+currency+'</b>', { parse_mode: 'HTML' })
     try {
-      await subscribeToken(p.issuer)
-      tracking[key] = { currency: p.currency, issuer: p.issuer, name: p.currency, startTime: Date.now() }
-      bot.sendMessage(msg.chat.id, '✅ Tracking <b>$'+p.currency+'</b>\n\n<code>'+p.issuer+'</code>\n\nBuy alerts incoming 🪞', { parse_mode: 'HTML' })
+      await subscribeToken(issuer)
+      tracking[key] = { currency, issuer, name: currency, startTime: Date.now() }
+      bot.sendMessage(msg.chat.id, '✅ Tracking <b>$'+currency+'</b>\n\n<code>'+issuer+'</code>\n\nBuy alerts incoming 🪞', { parse_mode: 'HTML' })
     } catch (e) { bot.sendMessage(msg.chat.id, '❌ '+e.message) }
   })
 })
@@ -649,7 +689,7 @@ async function sendHourlyPost() {
 setInterval(sendHourlyPost, 60*60*1000)
 
 bot.setMyCommands([
-  { command:'track',    description:'Track token — TICKER+rIssuer (admin)' },
+  { command:'track',    description:'Track token — drop issuer address (admin)' },
   { command:'stop',     description:'Stop tracking (admin)' },
   { command:'stopall',  description:'Stop all tracking (admin)' },
   { command:'list',     description:'Show tracked tokens (admin)' },
