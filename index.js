@@ -8,6 +8,10 @@ const CHAT_ID        = process.env.CHAT_ID           || '-1003968691129'
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || ''
 const TWITTER_BEARER = process.env.TWITTER_BEARER    || ''
 const XRPL_WS        = 'wss://xrplcluster.com'
+
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://socglufzpjtpyfhpbciv.supabase.co'
+const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
+
 const IMAGE_PATH      = './alert.png'
 const RAID_IMAGE_PATH = './raid.png'
 const RAID_RESURFACE  = 5
@@ -17,6 +21,53 @@ let client   = null
 let tracking = {}
 let xrpUsd   = 0.5
 let activeRaid = null
+
+async function saveState() {
+  if (!SUPABASE_KEY) return
+  try {
+    const state = {
+      tracking,
+      activeRaid: activeRaid && !activeRaid.ended ? activeRaid : null
+    }
+    await fetch(SUPABASE_URL + '/rest/v1/bot_state', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify([
+        { key: 'tracking', value: state.tracking, updated_at: new Date().toISOString() },
+        { key: 'activeRaid', value: state.activeRaid, updated_at: new Date().toISOString() }
+      ])
+    })
+    console.log('💾 State saved to Supabase')
+  } catch (e) { console.error('saveState error:', e.message) }
+}
+
+async function loadState() {
+  if (!SUPABASE_KEY) return
+  try {
+    const r = await fetch(SUPABASE_URL + '/rest/v1/bot_state?select=key,value', {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY
+      }
+    })
+    const rows = await r.json()
+    for (const row of rows) {
+      if (row.key === 'tracking' && row.value) {
+        tracking = row.value
+        console.log('📂 Restored tracking:', Object.keys(tracking).join(', ') || 'none')
+      }
+      if (row.key === 'activeRaid' && row.value) {
+        activeRaid = row.value
+        console.log('📂 Restored active raid:', activeRaid.url)
+      }
+    }
+  } catch (e) { console.error('loadState error:', e.message) }
+}
 
 async function isAdmin(chatId, userId) {
   try {
@@ -181,6 +232,7 @@ async function endRaid(raid, reason) {
       { parse_mode: 'HTML' })
   } catch {}
   activeRaid = null
+  await saveState()
 }
 
 async function connectXRPL() {
@@ -188,7 +240,8 @@ async function connectXRPL() {
   client = new xrpl.Client(XRPL_WS)
   client.on('disconnected', () => {
     console.log('⚠️ Disconnected — reconnecting...')
-    setTimeout(() => connectXRPL().catch(console.error), 5000)
+    setTimeout(() => connectXRPL().catch(console.error)
+})(), 5000)
   })
   await client.connect()
   console.log('✅ XRPL connected')
@@ -391,6 +444,7 @@ bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
     try {
       await subscribeToken(issuer)
       tracking[key] = { currency, issuer, name: currency, startTime: Date.now() }
+      await saveState()
       bot.sendMessage(msg.chat.id, '✅ Tracking <b>$'+currency+'</b>\n\n<code>'+issuer+'</code>\n\nBuy alerts incoming 🪞', { parse_mode: 'HTML' })
     } catch (e) { bot.sendMessage(msg.chat.id, '❌ '+e.message) }
   })
@@ -404,6 +458,7 @@ bot.onText(/\/stop(?:@\w+)?\s+(.+)/, async (msg, match) => {
     if (!tracking[key]) return bot.sendMessage(msg.chat.id, '⚠️ Not tracking', { parse_mode: 'HTML' })
     await unsubscribeToken(p.issuer)
     delete tracking[key]
+    await saveState()
     bot.sendMessage(msg.chat.id, '🛑 Stopped <b>$'+p.currency+'</b>', { parse_mode: 'HTML' })
   })
 })
@@ -416,6 +471,7 @@ bot.onText(/\/stopall(?:@\w+)?/, async msg => {
       try { await unsubscribeToken(tracking[key].issuer) } catch {}
       delete tracking[key]
     }
+    await saveState()
     bot.sendMessage(msg.chat.id, '🛑 Stopped all '+count+' token(s).')
   })
 })
@@ -453,6 +509,7 @@ bot.onText(/\/raid(?:@\w+)?\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)/, async (msg, match)
       targetRetweets: parseInt(match[4]),
       msgId: null, msgCounter: 0, startTime: Date.now(), ended: false
     }
+    await saveState()
     await postRaidMessage(activeRaid)
   })
 })
@@ -608,9 +665,12 @@ bot.on('message', async msg => {
   }
 
   if (activeRaid && !activeRaid.ended && chatId.toString()===activeRaid.chatId.toString() && !text.startsWith('/')) {
-    activeRaid.msgCounter++
-    if (activeRaid.msgCounter >= RAID_RESURFACE) {
-      await postRaidMessage(activeRaid)
+    // Only count real human messages, ignore bot messages
+    if (!msg.from.is_bot) {
+      activeRaid.msgCounter++
+      if (activeRaid.msgCounter >= RAID_RESURFACE) {
+        await postRaidMessage(activeRaid)
+      }
     }
   }
 
@@ -722,4 +782,20 @@ bot.setMyCommands([
   .catch(e => console.error('Commands error:', e.message))
 
 console.log('🪞 $REALITY Bot starting...')
+;(async () => {
+await loadState()
+// Re-subscribe to all tracked tokens after restart
+setTimeout(async () => {
+  const keys = Object.keys(tracking)
+  if (keys.length > 0) {
+    console.log('📡 Re-subscribing to', keys.length, 'token(s)...')
+    for (const key of keys) {
+      try {
+        await subscribeToken(tracking[key].issuer)
+        console.log('📡 Re-subscribed:', tracking[key].name)
+      } catch (e) { console.error('Re-subscribe error:', e.message) }
+    }
+  }
+}, 3000)
 connectXRPL().catch(console.error)
+})()
