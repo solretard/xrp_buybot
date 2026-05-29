@@ -240,8 +240,7 @@ async function connectXRPL() {
   client = new xrpl.Client(XRPL_WS)
   client.on('disconnected', () => {
     console.log('⚠️ Disconnected — reconnecting...')
-    setTimeout(() => connectXRPL().catch(console.error)
-})(), 5000)
+    setTimeout(() => connectXRPL().catch(console.error), 5000)
   })
   await client.connect()
   console.log('✅ XRPL connected')
