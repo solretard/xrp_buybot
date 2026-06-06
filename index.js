@@ -7,11 +7,7 @@ const BOT_TOKEN      = process.env.BOT_TOKEN         || '8716259652:AAFeu_Gl7url
 const CHAT_ID        = process.env.CHAT_ID           || '-1003968691129'
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || ''
 const TWITTER_BEARER = process.env.TWITTER_BEARER    || ''
-const XRPL_WS        = process.env.XRPL_WS || 'wss://s2.ripple.com'
-
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://socglufzpjtpyfhpbciv.supabase.co'
-const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
-
+const XRPL_WS        = 'wss://xrplcluster.com'
 const IMAGE_PATH      = './alert.png'
 const RAID_IMAGE_PATH = './raid.png'
 const RAID_RESURFACE  = 5
@@ -21,53 +17,6 @@ let client   = null
 let tracking = {}
 let xrpUsd   = 0.5
 let activeRaid = null
-
-async function saveState() {
-  if (!SUPABASE_KEY) return
-  try {
-    const state = {
-      tracking,
-      activeRaid: activeRaid && !activeRaid.ended ? activeRaid : null
-    }
-    await fetch(SUPABASE_URL + '/rest/v1/bot_state', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY,
-        'Prefer': 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify([
-        { key: 'tracking', value: state.tracking, updated_at: new Date().toISOString() },
-        { key: 'activeRaid', value: state.activeRaid, updated_at: new Date().toISOString() }
-      ])
-    })
-    console.log('💾 State saved to Supabase')
-  } catch (e) { console.error('saveState error:', e.message) }
-}
-
-async function loadState() {
-  if (!SUPABASE_KEY) return
-  try {
-    const r = await fetch(SUPABASE_URL + '/rest/v1/bot_state?select=key,value', {
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY
-      }
-    })
-    const rows = await r.json()
-    for (const row of rows) {
-      if (row.key === 'tracking' && row.value) {
-        tracking = row.value
-        console.log('📂 Restored tracking:', Object.keys(tracking).join(', ') || 'none')
-      }
-      if (row.key === 'activeRaid' && row.value) {
-        activeRaid = row.value
-        console.log('📂 Restored active raid:', activeRaid.url)
-      }
-    }
-  } catch (e) { console.error('loadState error:', e.message) }
-}
 
 async function isAdmin(chatId, userId) {
   try {
@@ -94,21 +43,14 @@ setInterval(fetchXrpPrice, 60000)
 
 async function fetchTokenData(currency, issuer) {
   try {
-    // Build hex currency code — pad to 20 bytes
-    const hexCurrency = Buffer.from(currency.padEnd(20, '\0')).toString('hex').toLowerCase()
-    const issuerLower = issuer.toLowerCase()
-
-    // Try exact pair URL from DexScreener
-    const urls = [
-      'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + hexCurrency + '.' + issuerLower + '_xrp',
-      'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + currency.toLowerCase() + '.' + issuerLower + '_xrp',
-    ]
-
-    for (const url of urls) {
-      console.log('📊 DexScreener URL:', url)
-      const r = await fetch(url)
+    const tickers = [currency]
+    if (!currency.startsWith('$')) tickers.push('$' + currency)
+    else tickers.push(currency.slice(1))
+    for (const ticker of tickers) {
+      const hex = Buffer.from(ticker.padEnd(20, '\0')).toString('hex').toUpperCase()
+      const url = 'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + hex + '.' + issuer + '_xrp'
+      const r = await fetch(url.toLowerCase())
       const d = await r.json()
-      console.log('📊 DexScreener response:', JSON.stringify(d).slice(0, 200))
       const pair = d?.pair || d?.pairs?.[0] || null
       if (pair) return {
         mcap: pair.marketCap || pair.fdv || 0,
@@ -138,11 +80,8 @@ function fmtNum(n) {
   return '$'+n.toFixed(2)
 }
 function hexToTicker(hex) {
-  try {
-    const clean = hex.replace(/00+$/, '')
-    const decoded = Buffer.from(clean, 'hex').toString('ascii').replace(/[^a-zA-Z0-9$]/g, '')
-    return decoded.toUpperCase()
-  } catch { return hex }
+  try { return Buffer.from(hex.replace(/00+$/,''),'hex').toString('ascii').replace(/[^a-zA-Z0-9]/g,'').toUpperCase() }
+  catch { return hex }
 }
 
 function extractTweetId(url) {
@@ -239,7 +178,6 @@ async function endRaid(raid, reason) {
       { parse_mode: 'HTML' })
   } catch {}
   activeRaid = null
-  await saveState()
 }
 
 async function connectXRPL() {
@@ -265,21 +203,8 @@ async function unsubscribeToken(issuer) {
 }
 
 async function handleTx(tx) {
-  let t = tx.transaction || tx
-  let meta = tx.meta || t.meta
-
-  // If metadata is incomplete, fetch full tx from ledger
-  if (!meta || !meta.AffectedNodes) {
-    try {
-      const hash = t.hash || tx.hash
-      if (hash) {
-        const full = await client.request({ command: 'tx', transaction: hash })
-        t = full.result || t
-        meta = full.result?.meta || meta
-      }
-    } catch (e) { console.log('Full tx fetch error: ' + e.message) }
-  }
-
+  const t = tx.transaction || tx
+  const meta = tx.meta || t.meta
   if (!meta || meta.TransactionResult !== 'tesSUCCESS') return
   const txType = t.TransactionType
   console.log('📥 TX: ' + txType + ' from ' + t.Account)
@@ -406,23 +331,27 @@ bot.onText(/\/start(?:@\w+)?/, msg => {
 })
 
 async function resolveTokenFromIssuer(issuer) {
-  // Retry XRPScan obligations up to 3 times with 2s delay before giving up
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const r = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/obligations')
-      const d = await r.json()
-      console.log('🔍 XRPScan obligations (attempt '+attempt+'):', JSON.stringify(d).slice(0, 200))
-      if (Array.isArray(d) && d.length > 0) {
-        const cur = d[0].currency
-        if (cur) {
-          const ticker = (cur.length > 6) ? hexToTicker(cur) : cur
+  try {
+    await connectXRPL()
+    const res = await client.request({ command: 'account_offers', account: issuer, limit: 1 })
+    const lines = await client.request({ command: 'account_lines', account: issuer, limit: 5 })
+    if (lines?.result?.lines?.length > 0) {
+      for (const line of lines.result.lines) {
+        const cur = line.currency
+        if (cur && cur.length <= 20) {
+          const ticker = cur.length === 40 ? hexToTicker(cur) : cur
           if (ticker && ticker.length > 0) return ticker
         }
       }
-    } catch (e) { console.log('resolveToken attempt '+attempt+' error: '+e.message) }
-    if (attempt < 3) await new Promise(r => setTimeout(r, 2000))
-  }
-  return null
+    }
+    const assets = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/assets')
+    const d = await assets.json()
+    if (Array.isArray(d) && d.length > 0) {
+      const cur = d[0].currency
+      return cur.length === 40 ? hexToTicker(cur) : cur
+    }
+    return null
+  } catch (e) { console.log('resolveToken error: '+e.message); return null }
 }
 
 bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
@@ -450,7 +379,6 @@ bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
     try {
       await subscribeToken(issuer)
       tracking[key] = { currency, issuer, name: currency, startTime: Date.now() }
-      await saveState()
       bot.sendMessage(msg.chat.id, '✅ Tracking <b>$'+currency+'</b>\n\n<code>'+issuer+'</code>\n\nBuy alerts incoming 🪞', { parse_mode: 'HTML' })
     } catch (e) { bot.sendMessage(msg.chat.id, '❌ '+e.message) }
   })
@@ -464,7 +392,6 @@ bot.onText(/\/stop(?:@\w+)?\s+(.+)/, async (msg, match) => {
     if (!tracking[key]) return bot.sendMessage(msg.chat.id, '⚠️ Not tracking', { parse_mode: 'HTML' })
     await unsubscribeToken(p.issuer)
     delete tracking[key]
-    await saveState()
     bot.sendMessage(msg.chat.id, '🛑 Stopped <b>$'+p.currency+'</b>', { parse_mode: 'HTML' })
   })
 })
@@ -477,7 +404,6 @@ bot.onText(/\/stopall(?:@\w+)?/, async msg => {
       try { await unsubscribeToken(tracking[key].issuer) } catch {}
       delete tracking[key]
     }
-    await saveState()
     bot.sendMessage(msg.chat.id, '🛑 Stopped all '+count+' token(s).')
   })
 })
@@ -515,7 +441,6 @@ bot.onText(/\/raid(?:@\w+)?\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)/, async (msg, match)
       targetRetweets: parseInt(match[4]),
       msgId: null, msgCounter: 0, startTime: Date.now(), ended: false
     }
-    await saveState()
     await postRaidMessage(activeRaid)
   })
 })
@@ -671,12 +596,9 @@ bot.on('message', async msg => {
   }
 
   if (activeRaid && !activeRaid.ended && chatId.toString()===activeRaid.chatId.toString() && !text.startsWith('/')) {
-    // Only count real human messages, ignore bot messages
-    if (!msg.from.is_bot) {
-      activeRaid.msgCounter++
-      if (activeRaid.msgCounter >= RAID_RESURFACE) {
-        await postRaidMessage(activeRaid)
-      }
+    activeRaid.msgCounter++
+    if (activeRaid.msgCounter >= RAID_RESURFACE) {
+      await postRaidMessage(activeRaid)
     }
   }
 
@@ -788,20 +710,4 @@ bot.setMyCommands([
   .catch(e => console.error('Commands error:', e.message))
 
 console.log('🪞 $REALITY Bot starting...')
-;(async () => {
-await loadState()
-// Re-subscribe to all tracked tokens after restart
-setTimeout(async () => {
-  const keys = Object.keys(tracking)
-  if (keys.length > 0) {
-    console.log('📡 Re-subscribing to', keys.length, 'token(s)...')
-    for (const key of keys) {
-      try {
-        await subscribeToken(tracking[key].issuer)
-        console.log('📡 Re-subscribed:', tracking[key].name)
-      } catch (e) { console.error('Re-subscribe error:', e.message) }
-    }
-  }
-}, 3000)
 connectXRPL().catch(console.error)
-})()
