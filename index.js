@@ -386,36 +386,23 @@ bot.onText(/\/start(?:@\w+)?/, msg => {
 })
 
 async function resolveTokenFromIssuer(issuer) {
-  try {
-    // Try XRPScan account info first
-    const r1 = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer)
-    const d1 = await r1.json()
-    console.log('🔍 XRPScan account:', JSON.stringify(d1).slice(0, 200))
-
-    // Try obligations (what this account has issued)
-    const r2 = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/obligations')
-    const d2 = await r2.json()
-    console.log('🔍 XRPScan obligations:', JSON.stringify(d2).slice(0, 200))
-    if (Array.isArray(d2) && d2.length > 0) {
-      const cur = d2[0].currency
-      if (cur) {
-        const ticker = (cur.length > 6) ? hexToTicker(cur) : cur
-        if (ticker && ticker.length > 0) return ticker
+  // Retry XRPScan obligations up to 3 times with 2s delay before giving up
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const r = await fetch('https://api.xrpscan.com/api/v1/account/'+issuer+'/obligations')
+      const d = await r.json()
+      console.log('🔍 XRPScan obligations (attempt '+attempt+'):', JSON.stringify(d).slice(0, 200))
+      if (Array.isArray(d) && d.length > 0) {
+        const cur = d[0].currency
+        if (cur) {
+          const ticker = (cur.length > 6) ? hexToTicker(cur) : cur
+          if (ticker && ticker.length > 0) return ticker
+        }
       }
-    }
-
-    // Try gateway_balances via XRPL
-    await connectXRPL()
-    const gb = await client.request({ command: 'gateway_balances', account: issuer, ledger_index: 'validated' })
-    console.log('🔍 gateway_balances:', JSON.stringify(gb?.result).slice(0, 300))
-    const obligations = gb?.result?.obligations
-    if (obligations && Object.keys(obligations).length > 0) {
-      const cur = Object.keys(obligations)[0]
-      return cur.length === 40 ? hexToTicker(cur) : cur
-    }
-
-    return null
-  } catch (e) { console.log('resolveToken error: '+e.message); return null }
+    } catch (e) { console.log('resolveToken attempt '+attempt+' error: '+e.message) }
+    if (attempt < 3) await new Promise(r => setTimeout(r, 2000))
+  }
+  return null
 }
 
 bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
