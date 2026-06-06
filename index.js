@@ -7,7 +7,7 @@ const BOT_TOKEN      = process.env.BOT_TOKEN         || '8716259652:AAFeu_Gl7url
 const CHAT_ID        = process.env.CHAT_ID           || '-1003968691129'
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || ''
 const TWITTER_BEARER = process.env.TWITTER_BEARER    || ''
-const XRPL_WS        = 'wss://xrplcluster.com'
+const XRPL_WS        = process.env.XRPL_WS || 'wss://s2.ripple.com'
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://socglufzpjtpyfhpbciv.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
@@ -258,8 +258,21 @@ async function unsubscribeToken(issuer) {
 }
 
 async function handleTx(tx) {
-  const t = tx.transaction || tx
-  const meta = tx.meta || t.meta
+  let t = tx.transaction || tx
+  let meta = tx.meta || t.meta
+
+  // If metadata is incomplete, fetch full tx from ledger
+  if (!meta || !meta.AffectedNodes) {
+    try {
+      const hash = t.hash || tx.hash
+      if (hash) {
+        const full = await client.request({ command: 'tx', transaction: hash })
+        t = full.result || t
+        meta = full.result?.meta || meta
+      }
+    } catch (e) { console.log('Full tx fetch error: ' + e.message) }
+  }
+
   if (!meta || meta.TransactionResult !== 'tesSUCCESS') return
   const txType = t.TransactionType
   console.log('📥 TX: ' + txType + ' from ' + t.Account)
