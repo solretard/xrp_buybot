@@ -94,14 +94,21 @@ setInterval(fetchXrpPrice, 60000)
 
 async function fetchTokenData(currency, issuer) {
   try {
-    const tickers = [currency]
-    if (!currency.startsWith('$')) tickers.push('$' + currency)
-    else tickers.push(currency.slice(1))
-    for (const ticker of tickers) {
-      const hex = Buffer.from(ticker.padEnd(20, '\0')).toString('hex').toUpperCase()
-      const url = 'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + hex + '.' + issuer + '_xrp'
-      const r = await fetch(url.toLowerCase())
+    // Build hex currency code — pad to 20 bytes
+    const hexCurrency = Buffer.from(currency.padEnd(20, '\0')).toString('hex').toLowerCase()
+    const issuerLower = issuer.toLowerCase()
+
+    // Try exact pair URL from DexScreener
+    const urls = [
+      'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + hexCurrency + '.' + issuerLower + '_xrp',
+      'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + currency.toLowerCase() + '.' + issuerLower + '_xrp',
+    ]
+
+    for (const url of urls) {
+      console.log('📊 DexScreener URL:', url)
+      const r = await fetch(url)
       const d = await r.json()
+      console.log('📊 DexScreener response:', JSON.stringify(d).slice(0, 200))
       const pair = d?.pair || d?.pairs?.[0] || null
       if (pair) return {
         mcap: pair.marketCap || pair.fdv || 0,
