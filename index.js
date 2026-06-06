@@ -7,7 +7,7 @@ const BOT_TOKEN      = process.env.BOT_TOKEN         || '8716259652:AAFeu_Gl7url
 const CHAT_ID        = process.env.CHAT_ID           || '-1003968691129'
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY || ''
 const TWITTER_BEARER = process.env.TWITTER_BEARER    || ''
-const XRPL_WS        = 'wss://xrplcluster.com'
+const XRPL_WS        = 'wss://s2.ripple.com'
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://socglufzpjtpyfhpbciv.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_KEY || ''
