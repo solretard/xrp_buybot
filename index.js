@@ -92,31 +92,43 @@ async function fetchXrpPrice() {
 fetchXrpPrice()
 setInterval(fetchXrpPrice, 60000)
 
-async function fetchTokenData(currency, issuer) {
+async function fetchTokenData(currency, issuer, rawHex) {
   try {
-    // Build hex currency code — pad to 20 bytes
-    const hexCurrency = Buffer.from(currency.padEnd(20, '\0')).toString('hex').toLowerCase()
     const issuerLower = issuer.toLowerCase()
 
-    // Try exact pair URL from DexScreener
-    const urls = [
-      'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + hexCurrency + '.' + issuerLower + '_xrp',
-      'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + currency.toLowerCase() + '.' + issuerLower + '_xrp',
-    ]
+    // Build all possible hex variants to try
+    const hexVariants = new Set()
 
-    for (const url of urls) {
-      console.log('📊 DexScreener URL:', url)
+    // If we have the raw hex from chain obligations, use it first
+    if (rawHex) hexVariants.add(rawHex.toLowerCase())
+
+    // Try encoding the currency as-is (mixed case)
+    hexVariants.add(Buffer.from(currency.padEnd(20, '\0')).toString('hex').toLowerCase())
+
+    // Try lowercase version
+    hexVariants.add(Buffer.from(currency.toLowerCase().padEnd(20, '\0')).toString('hex').toLowerCase())
+
+    // Try title case (Reality)
+    const titleCase = currency.charAt(0).toUpperCase() + currency.slice(1).toLowerCase()
+    hexVariants.add(Buffer.from(titleCase.padEnd(20, '\0')).toString('hex').toLowerCase())
+
+    for (const hex of hexVariants) {
+      const url = 'https://api.dexscreener.com/latest/dex/pairs/xrpl/' + hex + '.' + issuerLower + '_xrp'
+      console.log('📊 Trying:', url)
       const r = await fetch(url)
       const d = await r.json()
-      console.log('📊 DexScreener response:', JSON.stringify(d).slice(0, 200))
       const pair = d?.pair || d?.pairs?.[0] || null
-      if (pair) return {
-        mcap: pair.marketCap || pair.fdv || 0,
-        price: parseFloat(pair.priceUsd || 0),
-        volume: pair.volume?.h24 || 0,
-        priceChange: pair.priceChange?.h24 || 0,
+      if (pair) {
+        console.log('📊 Found pair with hex:', hex)
+        return {
+          mcap: pair.marketCap || pair.fdv || 0,
+          price: parseFloat(pair.priceUsd || 0),
+          volume: pair.volume?.h24 || 0,
+          priceChange: pair.priceChange?.h24 || 0,
+        }
       }
     }
+    console.log('📊 No pair found on DexScreener')
     return null
   } catch (e) { console.log('DexScreener error: ' + e.message); return null }
 }
@@ -331,7 +343,7 @@ async function sendBuyAlert({ name, currency, issuer, buyerAddr, xrpSpent, token
   const dexLink = 'https://dexscreener.com/xrpl/'+currency+'.'+issuer+'_xrp'
   const size    = xrpSpent<10 ? '🐟' : xrpSpent<100 ? '🐬' : '🐳'
   const newBadge = isNewHolder ? '\n🆕 <b>New Holder!</b>' : ''
-  const td = await fetchTokenData(currency, issuer)
+  const td = await fetchTokenData(currency, issuer, tracking[currency+'_'+issuer]?.rawHex)
   let mcLine='', barLine='', volLine=''
   if (td && td.mcap>0) {
     const { bar, pct, targetFmt, mcapFmt } = buildMCBar(td.mcap)
@@ -434,8 +446,9 @@ bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
     if (input.startsWith('r') && input.length >= 25 && !input.includes('+') && !input.includes(' ')) {
       issuer = input
       bot.sendMessage(msg.chat.id, '🔍 Looking up token for <code>'+issuer+'</code>...', { parse_mode: 'HTML' })
-      currency = await resolveTokenFromIssuer(issuer)
-      if (!currency) return bot.sendMessage(msg.chat.id, '❌ Could not detect token. Try: /track TICKER+rIssuerAddress')
+      const resolved = await resolveTokenFromIssuer(issuer)
+      if (!resolved) return bot.sendMessage(msg.chat.id, '❌ Could not detect token. Try: /track TICKER+rIssuerAddress')
+      currency = resolved.ticker || resolved
     } else {
       // Legacy format: TICKER+issuer or TICKER issuer
       const parts = input.split(/[\s+]+/)
@@ -449,7 +462,8 @@ bot.onText(/\/track(?:@\w+)?\s+(\S+)/, async (msg, match) => {
     if (tracking[key]) return bot.sendMessage(msg.chat.id, '⚠️ Already tracking <b>$'+currency+'</b>', { parse_mode: 'HTML' })
     try {
       await subscribeToken(issuer)
-      tracking[key] = { currency, issuer, name: currency, startTime: Date.now() }
+      const rawHex = resolved?.rawHex || null
+      tracking[key] = { currency, issuer, name: currency, startTime: Date.now(), rawHex }
       await saveState()
       bot.sendMessage(msg.chat.id, '✅ Tracking <b>$'+currency+'</b>\n\n<code>'+issuer+'</code>\n\nBuy alerts incoming 🪞', { parse_mode: 'HTML' })
     } catch (e) { bot.sendMessage(msg.chat.id, '❌ '+e.message) }
@@ -550,7 +564,7 @@ bot.onText(/\/price(?:@\w+)?/, async msg => {
   if (!keys.length) return bot.sendMessage(msg.chat.id, '⚠️ No tokens tracked.')
   for (const key of keys) {
     const { currency, issuer, name } = tracking[key]
-    const d = await fetchTokenData(currency, issuer)
+    const d = await fetchTokenData(currency, issuer, tracking[currency+'_'+issuer]?.rawHex)
     if (!d) { bot.sendMessage(msg.chat.id, '⚠️ Could not fetch price for $'+name); continue }
     const { bar, pct, targetFmt, mcapFmt } = buildMCBar(d.mcap)
     const change = d.priceChange>0 ? '+'+d.priceChange.toFixed(2)+'%' : d.priceChange.toFixed(2)+'%'
@@ -565,7 +579,7 @@ bot.onText(/\/mc(?:@\w+)?/, async msg => {
   if (!keys.length) return bot.sendMessage(msg.chat.id, '⚠️ No tokens tracked.')
   for (const key of keys) {
     const { currency, issuer, name } = tracking[key]
-    const d = await fetchTokenData(currency, issuer)
+    const d = await fetchTokenData(currency, issuer, tracking[currency+'_'+issuer]?.rawHex)
     if (!d) return bot.sendMessage(msg.chat.id, '⚠️ Could not fetch MC')
     const { bar, pct, targetFmt, mcapFmt } = buildMCBar(d.mcap)
     bot.sendMessage(msg.chat.id,
